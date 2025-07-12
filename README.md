@@ -4,21 +4,19 @@
 [TPC-Form](https://github.com/MATPOWER/tpc-form) is a package of MATLAB M-files and classes for using a novel quadratic approximation of the AC power flow equations in [MATPOWER](https://github.com/MATPOWER/matpower). TPC-Form is based on code written by Wilson González Vanegas (`wgv`) using the new Object-Oriented Programming architecture of MATPOWER for developers. The current implementation allows for using a quadratic model where the power flow equations are approximated as a set of quadratic forms in transformed polar coordinates consisting of voltage angles and logarithm of the voltage magnitudes.
 
 ## System requirements
-- [MATPOWER](https://github.com/MATPOWER/matpower) 8.0 or later.
+- [MATPOWER](https://github.com/MATPOWER/matpower) 8.1 or later.
 
 ## Installation
 Installation and use of TPC-Form requires familiarity with the basic operation of MATLAB, including setting up your MATLAB path.
 
 1. Clone the repository or download and extract the zip file of the TPC-Form distribution from the [TPC-Form project page](https://github.com/MATPOWER/tpc-form) to the location of your choice. We will use `<TPC>` to denote the path to this directory.
    
-2. Add the following directories to your MATLAB path:
+2. Add the following directory to your MATLAB path:
    
-    - `<TPC>/lib/+wgv`
-    - `<TPC>/lib/examples`
-    - `<TPC>/lib/other`
+    - `<TPC>/lib/`
 
 ## Sample usage
-We use `case118` as a test system to compare the power flow results obtained using the AC power flow equations and those calculated with the Quadratic Approximation in Transformed Polar Coordinates (QTPC):
+We use `case118` as a test system to compare the power flow results obtained using the AC power flow equations and those calculated with the Quadratic Approximation in Transformed Polar Coordinates (QTPC). In the following code, notice that the `tpc` formulation is used via a [MATPOWER extension](https://matpower.org/doc/dev-manual/customizing.html#matpower-extensions) called `xt_tpc`:
 
 ```matlab
 %% Load case
@@ -28,29 +26,31 @@ mpc = loadcase('case118');
 mpopt_qtpc = mpoption('model','TPC');
 mpopt_qtpc.pf.tpc.form = 'QUAD';
 
-%% Initialize power flow task objects
-mpt_pf_ac = mp.task_pf();
-mpt_pf_qtpc = wgv.task_pf();
+%% Run the exact AC power flow with default options
+res_ac = run_pf(mpc);
 
-%% Run the exact AC power flow
-res_ac = mpt_pf_ac.run(mpc);
-
-%% Run the approximated power flow with QTPC formulation
-res_qtpc = mpt_pf_qtpc.run(mpc, mpopt_qtpc);
+%% Run the approximated power flow with QTPC formulation using the tpc extension
+res_qtpc = run_pf(mpc, mpopt_qtpc, 'mpx', wgv.xt_tpc);
 ```
-You should see something like the following printing in the Command Window (subject to your MATPOWER version): 
+You should see something like the following printing in the Command Window:
 ```
-MATPOWER Version 8.1-dev, 04-Jul-2025
+MATPOWER Version 8.1, 10-Jul-2025
 Power Flow -- AC-polar-power formulation
 
 Newton's method converged in 3 iterations.
 PF successful
+.
+.
+.
 
-MATPOWER Version 8.1-dev, 04-Jul-2025
+MATPOWER Version 8.1, 10-Jul-2025
 Power Flow -- TPC-QUAD formulation
 
 Newton's method converged in 3 iterations.
 PF successful
+.
+.
+.
 ```
 Finally, some metrics to compare the results with both formulations:
 ```matlab
