@@ -34,7 +34,7 @@ res_qtpc = run_pf(mpc, mpopt_qtpc, 'mpx', wgv.xt_tpc);
 ```
 You should see something like the following printing in the Command Window:
 ```
-MATPOWER Version 8.1, 10-Jul-2025
+MATPOWER Version 8.1, 12-Jul-2025
 Power Flow -- AC-polar-power formulation
 
 Newton's method converged in 3 iterations.
@@ -43,7 +43,7 @@ PF successful
 .
 .
 
-MATPOWER Version 8.1, 10-Jul-2025
+MATPOWER Version 8.1, 12-Jul-2025
 Power Flow -- TPC-QUAD formulation
 
 Newton's method converged in 3 iterations.
