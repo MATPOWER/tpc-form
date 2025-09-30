@@ -88,7 +88,11 @@ mpre =
 ```
 
 ## Documentation
-Some Live Scripts and Live Functions included in `<TPC>/examples` and `<TPC>/other` can serve as illustrations of the theoretical background behind the QTPC formulation. 
+Some Live Scripts and Live Functions included in `<TPC>/examples` and `<TPC>/other` can serve as illustrations of how to use the QTPC formulation for power flow tasks. Moreover, the theoretical background of the new formulation is described in a scientific paper. See next section for more information.
 
 ## Citing
-The mathematical formulation of QTPC is included in the draft paper ***A Quadratic Approximation of AC Power Flows in Transformed Polar Coordinates*** by Wilson González-Vanegas and Carlos E. Murillo-Sánchez, which is being considered for publication in the journal [ e-Prime - Advances in Electrical Engineering, Electronics and Energy](https://www.sciencedirect.com/journal/e-prime-advances-in-electrical-engineering-electronics-and-energy). The exact reference will be updated in the future in case of journal acceptance.
+The mathematical formulation of the QTPC approximation is detailed in the following paper:
+
+W. González-Vanegas and C.E. Murillo-Sánchez. ***A Quadratic Approximation of AC Power Flows in Transformed Polar Coordinates***. *e-Prime-Advances in Electrical Engineering, Electronics and Energy,* vol.14, p.  101105, 2025. DOI: [https://doi.org/10.1016/j.prime.2025.101105](https://doi.org/10.1016/j.prime.2025.101105).
+
+Please **cite this paper in any work** (document, report, manuscript, etc.) that utilizes information from this repository.
