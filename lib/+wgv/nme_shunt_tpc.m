@@ -23,7 +23,7 @@ classdef nme_shunt_tpc < mp.nme_shunt & wgv.form_tpc
             dme = obj.data_model_element(dm);
             Ysh = dme.gs + 1j * dme.bs;             %% shunt admittances
             nsh = obj.nk;                           %% number of shunt elements            
-            nb = nm.node.N;                         %% total number of buses
+            nb = nm.node.idx.N.bus;                         %% total number of buses
             id_sh = dme.bus;                        %% shunt buses             
 
             %% 1) Qu parameter            

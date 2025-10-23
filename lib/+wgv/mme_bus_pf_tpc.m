@@ -20,11 +20,19 @@ classdef mme_bus_pf_tpc < mp.mme_bus
     methods
         function obj = data_model_update_on(obj, mm, nm, dm, mpopt)
             %
+            
+            nn = nm.get_idx('node');           
+
+            %% check for hybrid case
+            if nm.userdata.ishybrid
+                u = mm.aux_data.pm_all_va_lnvm_u*nm.soln.u;
+            else
+                u = nm.soln.u;                
+            end
 
             %% bus voltages (angles and log of magnitudes)
-            nn = nm.get_idx('node');
-            va = nm.soln.u(nn.i1.bus:nn.iN.bus);
-            lnvm = nm.soln.u(nn.iN.bus+1:2*nn.iN.bus);
+            va = u(nn.i1.bus:nn.iN.bus);
+            lnvm = u(nn.iN.bus+1:2*nn.iN.bus);
 
             %% update in the data model
             dme = obj.data_model_element(dm);

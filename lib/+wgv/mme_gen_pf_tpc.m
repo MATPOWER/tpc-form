@@ -23,8 +23,15 @@ classdef mme_gen_pf_tpc < mp.mme_gen
 
             %% generator active power
             ss = nm.get_idx('state');
-            pg = nm.soln.z(ss.i1.gen:ss.iN.gen);
-            qg = nm.soln.z(ss.iN.gen+1:2*ss.iN.gen);
+
+            %% check for hybrid case
+            if nm.userdata.ishybrid
+                z = mm.aux_data.pm_all_1p3p_z' * nm.soln.z; 
+            else
+                z = nm.soln.z;
+            end
+            pg = z(ss.i1.gen:ss.iN.gen);
+            qg = z(ss.iN.gen+1:2*ss.iN.gen);
 
             %% update in the data model
             dme = obj.data_model_element(dm);
