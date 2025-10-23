@@ -32,6 +32,7 @@ classdef mme_branch_pf_tpc < mp.mme_branch
 
             %% branch shunt power losses
             nn = nm.get_idx('node'); 
+            nbus = nm.node.N;
 
             % Option 1: Losses according to the quadratic TPC formulation
             % C_fr = nme.C(:,1:nme.nk)';
@@ -45,16 +46,16 @@ classdef mme_branch_pf_tpc < mp.mme_branch
 
             % Option 2: Losses according to the AC power flow formulation
             va   = nm.soln.u(nn.i1.bus:nn.iN.bus);
-            lnvm = nm.soln.u(nn.iN.bus+1:2*nn.iN.bus);
+            lnvm = nm.soln.u(nn.i1.bus+nbus:nn.iN.bus+nbus);
             polarV = exp(lnvm).*exp(1j*va);
-            v = nme.C' * polarV;
+            v = nme.C(nn.i1.bus:nn.iN.bus,:)' * polarV;
             vm2 = v .* conj(v);
             vm2_fr = vm2(1:length(v)/2);
             vm2_to = vm2(length(v)/2+1:end);
             psh_fr =  vm2_fr .* dme.tab.g_fr(dme.on);
-            qsh_fr = -vm2_fr .* dme.tab.b_fr(dme.on);
+            qsh_fr =  vm2_fr .* dme.tab.b_fr(dme.on);
             psh_to =  vm2_to .* dme.tab.g_to(dme.on);
-            qsh_to = -vm2_to .* dme.tab.b_to(dme.on);
+            qsh_to =  vm2_to .* dme.tab.b_to(dme.on);
             
             %% update in the data model
             dme.tab.pl_fr(dme.on) = real(S_fr) * dm.base_mva;
