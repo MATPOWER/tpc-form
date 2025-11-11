@@ -251,7 +251,7 @@ classdef net_model_tpc < mp.net_model & wgv.form_tpc
         % ************ OVERRIDDEN METHODS FROM PARENT CLASSES ************
         % -----------------------------------------------------------------
 
-        function P = stack_matrix_params(obj, name, WnotM)
+        function P = stack_matrix_params(obj, name, QnotM)
             % THIS FUNCTION OVERRIDES THE CORRESPONDING METHOD OF PARENT
             % CLASS mp.net_model (due to working with real vector x, and 
             % both cell and matrix parameters, i.e. Qu, Qz, M, and N)
@@ -275,17 +275,19 @@ classdef net_model_tpc < mp.net_model & wgv.form_tpc
             % formed by stacking vertically the corresponding parameters 
             % for each element.
             
-            if WnotM
-                P = {};
+            if QnotM
+                P1p = {};
+                P3p = {};
             else
-                P = [];
+                P1p = [];
+                P3p = [];
             end
 
             for k = 1:length(obj.elements)
                 nme = obj.elements{k};
                 Pk = nme.(name);
                 if isempty(Pk)
-                    if WnotM                        
+                    if QnotM                        
                         Pk = repmat([1 1 0], nme.nk * nme.np, 1);
                         Pk = mat2cell(Pk, ones(nme.nk * nme.np, 1));
                     else
@@ -296,12 +298,17 @@ classdef net_model_tpc < mp.net_model & wgv.form_tpc
                         end                        
                     end
                 end
-                P = vertcat(P,Pk);
-                % if WnotM
-                %     P = vertcat(P,Pk);
-                % else
-                %     P = blkdiag(P,Pk);
-                % end
+                if ismember('3',nme.name) 
+                    P3p = vertcat(P3p,Pk);
+                else
+                    P1p = vertcat(P1p,Pk);
+                end                
+            end
+
+            if QnotM
+                P = [P1p; P3p];
+            else
+                P = blkdiag(P1p, P3p);
             end
         end
 

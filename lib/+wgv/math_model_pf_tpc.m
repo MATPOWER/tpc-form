@@ -66,10 +66,9 @@ classdef math_model_pf_tpc < mp.math_model_pf & wgv.mm_shared_pfcpf_tpc
             
             %% Define quadratic forms for complex power bus injections at PV-PQ buses
             id_vars = [pvq; ad.pq + nm.node.N];    % the vector of variables is [theta_pv; theta_pq; lnvm_pq]  (npv+2np variables)
-            ad.id_vars = id_vars;
-            
+            ad.id_vars = id_vars;            
             [ad.Qbus_pvq, ad.Cbus_pvq, ad.kbus_pvq] = obj.bus_complex_injection(nm, ports(pvq), id_vars);   
-
+                        
             % Active power at PV buses            
             C_Ppv = real(ad.Cbus_pvq(1:ad.npv,:));
             k_Ppv = real(ad.kbus_pvq(1:ad.npv));
@@ -83,8 +82,7 @@ classdef math_model_pf_tpc < mp.math_model_pf & wgv.mm_shared_pfcpf_tpc
             % Reactive power at PQ buses            
             C_Qpq = imag(ad.Cbus_pvq(ad.npv+1:ad.npv+ad.npq,:));
             k_Qpq = imag(ad.kbus_pvq(ad.npv+1:ad.npv+ad.npq));
-            Qbus_pq = imag(ad.Sbus(ad.pq));
-            
+            Qbus_pq = imag(ad.Sbus(ad.pq));            
             
             if obj.userdata.tpc.lin  % linear tpc-based formulation
                 Q_Ppv = [];
@@ -99,13 +97,13 @@ classdef math_model_pf_tpc < mp.math_model_pf & wgv.mm_shared_pfcpf_tpc
             %% Power balance constraints
             if obj.userdata.tpc.quad   %% quadratic tpc-based formulation
                 
-                % Build params for creating set of quadratic constraints
+                % Build params for creating set of quadratic constraints                
                 Q = vertcat(Q_Ppv, Q_Ppq, Q_Qpq);
                 C = [C_Ppv; C_Ppq; C_Qpq];
                 k = [k_Ppv; k_Ppq; k_Qpq];
                 l = [Pbus_pv; Pbus_pq; Qbus_pq] - k;
-                
-                obj.qcn.add(obj.var,'PQmis_pvq', Q, C, l, l);
+
+                obj.qcn.add(obj.var,'PQmis_pvq', Q, C, l, l);                
             else                        %% linear tpc-based formulation
 
                 % Build params for creating set of quadratic constraints
@@ -140,21 +138,74 @@ classdef math_model_pf_tpc < mp.math_model_pf & wgv.mm_shared_pfcpf_tpc
                 [gen_buses, ~] = find(nm.elements.gen.C); 
                 u0(id_offset + gen_buses) = ...
                     log(dme_gen.tab.vm_setpoint(dme_gen.on));            %% ln(vm) according to 1-phase gen info
-            end            
+            end
+
+            %% 3-phase side
+            if dm.elements.has_name('bus3p')
+                if ~isempty(dm.source.bus3p)
+                    if isempty(dm.source.bus)
+                        nb1p = 0;
+                    else
+                        nb1p = nm.node.idx.N.bus;
+                    end
+
+                    if isempty(dm.source.bus3p)
+                        nb3p = 0;
+                    else
+                        nb3p = sum(nm.node.idx.N.bus3p);
+                    end
+                    
+                    dme_bus3p = dm.elements.bus3p;
+                    id_offset = repmat([nb3p/3 2*nb3p/3 nb3p],numel(dme_bus3p.on),1);
+                    id_offset = id_offset(:);
+                    id_theta3p = repmat(dme_bus3p.on,3,1) + id_offset;
+                    u0(id_theta3p) = deg2rad([dme_bus3p.tab.va1(dme_bus3p.on);
+                                              dme_bus3p.tab.va2(dme_bus3p.on);
+                                              dme_bus3p.tab.va3(dme_bus3p.on)]);
+                    u0(id_theta3p+nb3p) = log([dme_bus3p.tab.vm1(dme_bus3p.on);
+                                               dme_bus3p.tab.vm2(dme_bus3p.on);
+                                               dme_bus3p.tab.vm3(dme_bus3p.on)]);
+                    
+                end
+
+                if ~isempty(dm.source.gen3p)
+                    if isempty(dm.source.bus)
+                        nb1p = 0;
+                    else
+                        nb1p = nm.node.idx.N.bus;
+                    end
+
+                    if isempty(dm.source.bus3p)
+                        nb3p = 0;
+                    else
+                        nb3p = sum(nm.node.idx.N.bus3p);
+                    end
+
+                    dme_gen3p = dm.elements.gen3p;
+                    [gen_buses,~] = find(nm.elements.gen3p.C);
+                    id_offset = nb3p;
+                    u0(gen_buses+id_offset) = ...
+                        log([dme_gen3p.tab.vm1_setpoint; ...
+                             dme_gen3p.tab.vm2_setpoint; ...
+                             dme_gen3p.tab.vm3_setpoint]);
+                    
+                end
+            end
         end
 
         function ports = ports_by_bus(obj, nm)
             %
                 
-            ports = {};            
+            ports1p = {};
+            ports3p = {};
 
             %% 1-phase side
             % Find ports connected to each 1-phase bus: branches
             if nm.elements.has_name('branch')
                 np = sum(nm.elements.branch.C,2);                         %% number of ports connected to each bus
-                [ports, ~] = find(nm.elements.branch.C');
-                ports = ports + min(nm.port.idx.i1.branch) - 1;       %% port numbers w.r.t. full network
-                ports = mat2cell(ports, np);               
+                [ports1p, ~] = find(nm.elements.branch.C');
+                ports1p = ports1p + min(nm.port.idx.i1.branch) - 1;       %% port numbers w.r.t. full network
+                ports1p = mat2cell(ports1p, np);               
             end
 
             % Find ports connected to each 1-phase bus: shunts
@@ -164,9 +215,57 @@ classdef math_model_pf_tpc < mp.math_model_pf & wgv.mm_shared_pfcpf_tpc
                 
                 for i = 1:length(id_bus_shunt)
                     b = id_bus_shunt(i);                    
-                    ports{b} = [ports{b}; ports_shunt1p(i)];   %% Add shunt port to corresponding bus indices
+                    ports1p{b} = [ports1p{b}; ports_shunt1p(i)];   %% Add shunt port to corresponding bus indices
                 end           
-            end                      
+            end
+
+            %% 3-phase side
+            % Find ports connected to each 3-phase bus: 3-phase lines
+            if nm.elements.has_name('line3p')
+                np = sum(nm.elements.line3p.C,2);                         %% number of ports connected to each bus
+                [ports3p, ~] = find(nm.elements.line3p.C');
+                ports3p = ports3p + min(nm.port.idx.i1.line3p) - 1;       %% port numbers w.r.t. full network
+                ports3p = mat2cell(ports3p, np);
+            end
+
+            % Find ports connected to each 3-phase bus: 3-phase transformers
+            if nm.elements.has_name('xfmr3p')
+                if nm.elements.has_name('bus')
+                    nb1p = nm.node.idx.N.bus;
+                else
+                    nb1p = 0;
+                end
+
+                [ports_xfrm3p, id_bus_xfmr3p] = find(nm.elements.xfmr3p.C');
+                ports_xfrm3p = ports_xfrm3p + min(nm.port.idx.i1.xfmr3p) - 1;     %% port numbers w.r.t. full network 
+                id_bus_xfmr3p = id_bus_xfmr3p - nb1p;                             %% indices w.r.t. 3-phase buses
+
+                for i = 1:length(id_bus_xfmr3p)
+                    b = id_bus_xfmr3p(i);
+                    ports3p{b} = [ports3p{b}; ports_xfrm3p(i)];
+                end
+            end
+
+            % Find ports connected to each 3-phase bus: 3-phase shunts
+            if nm.elements.has_name('shunt3p')
+                if nm.elements.has_name('bus')
+                    nb1p = nm.node.idx.N.bus;
+                else
+                    nb1p = 0;
+                end
+                
+                [ports_shunt3p, id_bus_shunt3p] = find(nm.elements.shunt3p.C');
+                ports_shunt3p = ports_shunt3p + min(nm.port.idx.i1.shunt3p) - 1;     %% port numbers w.r.t. full network 
+                id_bus_shunt3p = id_bus_shunt3p - nb1p;                
+                
+                for i = 1:length(id_bus_shunt3p)
+                    b = id_bus_shunt3p(i);
+                    ports3p{b} = [ports3p{b}; ports_shunt3p(i)];
+                end
+            end
+
+            %% final cell array with ports by bus (both 1-phase and 3-phase buses)
+            ports = vertcat(ports1p, ports3p);
         end
 
         function [Q, C, k] = bus_complex_injection(obj, nm, ports, id_vars)
@@ -199,7 +298,7 @@ classdef math_model_pf_tpc < mp.math_model_pf & wgv.mm_shared_pfcpf_tpc
                 % vector of initial voltage angles and magnitudes
                 u0 = obj.userdata.u0';
 
-                not_id_vars = setdiff((1:nvars)',id_vars); %% indices of known voltage angles ad magnitudes
+                not_id_vars = setdiff((1:nvars)',id_vars); %% indices of known voltage angles and magnitudes
 
                 if nargin < 5
                     if ~isempty(id_vars)
@@ -250,7 +349,7 @@ classdef math_model_pf_tpc < mp.math_model_pf & wgv.mm_shared_pfcpf_tpc
             %
             
             if nargout > 1    % Return the Jacobian               
-               [f, ~, ~, J] = obj.qcn.eval(obj.var, x, 'PQmis_pvq');
+               [f, J] = obj.qcn.eval(obj.var, x, 'PQmis_pvq');
             else              % Return f               
                f = obj.qcn.eval(obj.var, x, 'PQmis_pvq');
             end

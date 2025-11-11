@@ -23,31 +23,44 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
             %% call parent
             ad = build_aux_data@mp.mm_shared_pfcpf(obj, nm, dm, mpopt);
 
-            %% Calculate Sbus 
+            %% Calculate Sbus (1-phase buses) 
             if nm.elements.has_name('gen')    %% (1-phase buses)
-                Cgen = nm.elements.gen.C;
-                Dgen = nm.elements.gen.D;
+                Cgen1p = nm.elements.gen.C;
+                Dgen1p = nm.elements.gen.D;
                 if nm.elements.has_name('load')
-                    Cload = nm.elements.load.C;
-                    Sload = nm.elements.load.s;
+                    Cload1p = nm.elements.load.C;
+                    Sload1p = nm.elements.load.s;
                 else
-                    Cload = 0;
-                    Sload = 0;
+                    Cload1p = 0;
+                    Sload1p = 0;
                 end
                 
-                Sbus = Cgen*Dgen'*(ad.zr + 1j * ad.zi) - Cload*Sload;
+                Sbus1p = Cgen1p*Dgen1p'*(ad.zr + 1j * ad.zi) - Cload1p*Sload1p;
             else
-                Sbus = [];
-                Sload = [];
-            end            
+                Sbus1p = [];
+                Sload1p = [];
+            end
 
-            ad.Sbus = Sbus;
-            ad.Sload = Sload;
+            %% Calculate Sbus (3-phase buses)
+            if isfield(nm.state.idx.N, 'gen3p')  %% (3-phase buses)
+                Cgen3p = nm.elements.gen3p.C;
+                Dgen3p = nm.elements.gen3p.D;
+                Cload3p = nm.elements.load3p.C;
+                Sload3p = nm.elements.load3p.s;
+                Sbus3p = Cgen3p*Dgen3p'*(ad.zr + 1j * ad.zi) - Cload3p*Sload3p;
+            else
+                Sbus3p = [];
+                Sload3p = [];
+            end
+
+            ad.Sbus = [Sbus1p; Sbus3p];
+            ad.Sload = [Sload1p; Sload3p];
 
             %% add fields .lin and .quad to the property 'userdata' of
             %  the math model according to this same properties of 
             %  the task object
 
+            
             if isfield(nm.userdata, 'tpc')
                 obj.userdata.tpc.lin  = nm.userdata.tpc.lin;
                 obj.userdata.tpc.quad = nm.userdata.tpc.quad;
@@ -136,13 +149,19 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
 
             ad = obj.aux_data;
             if nm.elements.has_name('load')
-                Cload = nm.elements.load.C;
+                Cload1p = nm.elements.load.C;
             else
-                Cload = [];
+                Cload1p = [];
             end
+            if nm.elements.has_name('load3p')
+                Cload3p = nm.elements.load3p.C;
+            else
+                Cload3p = [];
+            end
+            Cload = blkdiag(Cload1p, Cload3p);
             Sload = Cload * ad.Sload;
             rpv = [ad.ref; ad.pv];
-            id_vars = (1 : 2*nm.node.N)';    %% full vector of u-vars [\theta; lnvm]
+            id_vars = (1 : 2*nm.node.N)';    %% full vector of u-vars [\theta_(1&3)p; lnvm__(1&3)p]
 
             % Find ports of branches and shunts connected to each bus (for computing bus injection)
             ports = obj.ports_by_bus(nm);
@@ -174,14 +193,17 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
                 Q_Qrpv = [];
             end
     
-            % Add set of variables            
+            % Add set of variables
+            %obj.add_var('u_vars', 2*nm.node.N, u); % u_vars = [theta; lnvm]
             obj.var.add('u_vars', 2*nm.node.N, u); % u_vars = [theta; lnvm]
 
             % Add set of constraints
-            if obj.userdata.tpc.quad         %% quadratic tpc-based formulation                
+            if obj.userdata.tpc.quad         %% quadratic lnvm-based formulation
+                % obj.qcn.add(obj.var,'Pmis_ref', [], [], Q_Pref, C_Pref, k_Pref, {'u_vars'});
+                % obj.qcn.add(obj.var,'Qmis_rpv', [], [], Q_Qrpv, C_Qrpv, k_Qrpv, {'u_vars'});
                 obj.qcn.add(obj.var,'Pmis_ref', Q_Pref, C_Pref, -k_Pref, -k_Pref, {'u_vars'});
                 obj.qcn.add(obj.var,'Qmis_rpv', Q_Qrpv, C_Qrpv, -k_Qrpv, -k_Qrpv, {'u_vars'});
-            else                              %% linear tpc-based formulation                
+            else                              %% linear lnvm-based formulation                
                 obj.lin.add(obj.var,'Pmis_ref', C_Pref, -k_Pref, -k_Pref, {'u_vars'});
                 obj.lin.add(obj.var,'Qmis_rpv', C_Qrpv, -k_Qrpv, -k_Qrpv, {'u_vars'});
             end
@@ -216,9 +238,9 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
             i1 = obj.var.idx.i1.u_vars;
             iN = obj.var.idx.iN.u_vars;
             x(i1:iN) = u;
-            if obj.userdata.tpc.quad        %% quadratic tpc-based formulation
+            if obj.userdata.tpc.quad        %% quadratic lnvm-based formulation
                 Pbus_ref = obj.qcn.eval(obj.var, x, 'Pmis_ref') + real(Sload(ad.ref));
-            else                             %% linear tpc-based formulation
+            else                             %% linear lnvm-based formulation
                 Pbus_ref = obj.lin.eval(obj.var, x, 'Pmis_ref') + real(Sload(ad.ref));
             end
             
@@ -233,21 +255,29 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
             jrpv = find(any(CCrpv(:,1:size(nm.D,1)), 1));   %% indices of corresponding states            
 
             % compute port reactive power injections at PV/REF buses except generators
-            if obj.userdata.tpc.quad        %% quadratic tpc-based formulation
+            if obj.userdata.tpc.quad        %% quadratic lnvm-based formulation
                 Qbusrpv = obj.qcn.eval(obj.var, x, 'Qmis_rpv') + imag(Sload(rpv));
-            else                             %% linear tpc-based formulation
+            else                             %% linear lnvm-based formulation
                 Qbusrpv = obj.lin.eval(obj.var, x, 'Qmis_rpv') + imag(Sload(rpv));
             end
 
             % allocate reactive power according to the number of gens at each node
             if nm.elements.has_name('gen')
-                Cgen = nm.elements.gen.C;
-                ngen = nm.elements.gen.nk;
+                Cgen1p = nm.elements.gen.C;
+                ngen1p = nm.elements.gen.nk;
             else
-                Cgen = [];
-                ngen = 0;
-            end           
-            Qgen = [];            
+                Cgen1p = [];
+                ngen1p = 0;
+            end
+            if nm.elements.has_name('gen3p')
+                Cgen3p = nm.elements.gen3p.C;
+                ngen3p = nm.elements.gen3p.nk;
+            else
+                Cgen3p = [];
+                ngen3p = 0;
+            end
+            Qgen = [];
+            Cgen = blkdiag(Cgen1p,  Cgen3p);
             ngens = full(sum(Cgen, 2)); ngens(ad.pq) = [];
             for g = 1:length(ngens)
                 Qgen = [Qgen; repmat(Qbusrpv(g), ngens(g), 1)];
@@ -256,10 +286,16 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
             % find indices of z-vars related to reactive injections for gens 
             % according to the rpv indices
             if nm.elements.has_name('gen')
-                Dgen = nm.elements.gen.D;
+                Dgen1p = nm.elements.gen.D;
             else
-                Dgen = [];
+                Dgen1p = [];
             end
+            if nm.elements.has_name('gen3p')
+                Dgen3p = nm.elements.gen3p.D;
+            else
+                Dgen3p = [];
+            end
+            Dgen = blkdiag(Dgen1p, Dgen3p);
             CD = Cgen * Dgen;
             [Q_id, ~] = find(CD(rpv,:)'); 
             
@@ -273,7 +309,7 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
                 weights = [weights; abs(z(idg)./Pbus)];
             end
             weights(isnan(weights)) = 1;
-            z(ngen + Q_id) = weights.*Qgen;
+            z(ngen1p + ngen3p + Q_id) = weights.*Qgen;
         end
     end     %% methods
 end         %% classdef
