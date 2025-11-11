@@ -96,7 +96,7 @@ classdef net_model_tpc < mp.net_model & wgv.form_tpc
             % the aggregate network model parameters.
 
             %% call parent to build individual element parameters
-            build_params@mp.net_model(obj, nm, dm);
+            build_params@mp.net_model(obj, nm, dm);           
 
             %% aggregate parameters from individual elements
             obj.Qu = obj.stack_matrix_params('Qu', 1);
@@ -200,50 +200,46 @@ classdef net_model_tpc < mp.net_model & wgv.form_tpc
             % power injections, and saves them in ``nm.soln.gs_``.
 
             
-            % Extract solution and create variables for z-vars
-            u = obj.soln.u;     %% u_vars [theta; lnvm]
-            z = obj.soln.z;     %% z_vars [zr; zi]
-            mm.var.add('z_vars', 2*obj.state.N);  %% Create varset for z-vars            
+            % Extract solution, auxdata, and copy of math model
+            u = obj.soln.u;                     %% u_vars [theta; lnvm]
+            z = obj.soln.z;                     %% z_vars [zr; zi]
+            ad = mm.aux_data;
+            mm_copy = mm.aux_data.mm_copy;      %% The copy of the math model with additional vars and constraints
 
-            % Create quadratic constraints for complex power port injection
-            half_s = obj.s / 2;
+            % Create variables for all buses and states in the order of 1p/3p
+            if obj.userdata.ishybrid
+                mm_copy.var.add('u_vars',numel(u),ad.pm_all_va_lnvm_u*u);
+                mm_copy.var.add('z_vars',numel(z),ad.pm_all_1p3p_z*z);
+            else
+                mm_copy.var.add('u_vars',numel(u),u);
+                mm_copy.var.add('z_vars',numel(z),z);
+            end
+            np = obj.port.N;
 
             % (1) constraints for u-vars
-            if mm.userdata.tpc.quad        %% quadratic tpc-based formulation
-                id_W = mat2cell((1:obj.port.N)', ones(obj.port.N,1));
-                id_vars_u = (1:length(u))';
-                nvars_u = length(u);
-                Qu = mm.rearrange_quadratic_terms(obj.Qu, id_W, id_vars_u, nvars_u);
-                mm.qcn.add(mm.var,'Port_inj_u', Qu, obj.M, -half_s, -half_s, {'u_vars'});
+
+            if mm.userdata.tpc.quad        %% quadratic tpc-based formulation                
+                Qu = cellfun(@(x)(sparse(x(:,1), x(:,2), x(:,3), numel(u), numel(u))), obj.Qu, 'UniformOutput', false);                
+                mm_copy.qcn.add(mm_copy.var,'Port_inj_u', Qu, obj.M, -obj.s, -obj.s, {'u_vars'});
             else                             %% linear tpc-based formulation
-                mm.lin.add(mm.var,'Port_inj_u', obj.M, -half_s, -half_s, {'u_vars'});
+                mm_copy.lin.add(mm_copy.var,'Port_inj_u', obj.M, -obj.s, -obj.s, {'u_vars'});
             end
 
             % (2) constraints for z-vars
-            if mm.userdata.tpc.quad        %% quadratic tpc-based formulation
-                id_vars_z = (1:length(z))';
-                nvars_z = length(z);
-                Qz = mm.rearrange_quadratic_terms(obj.Qz, id_W, id_vars_z, nvars_z);
-                mm.qcn.add(mm.var, 'Port_inj_z', Qz, obj.N, -half_s, -half_s, {'z_vars'});
-            else                            %% linear tpc-based formulation
-                mm.lin.add(mm.var,'Port_inj_z', obj.N, -half_s, -half_s, {'z_vars'});
+            if mm.userdata.tpc.quad        %% quadratic tpc-based formulation                
+                Qz = cellfun(@(x)(sparse(x(:,1), x(:,2), x(:,3), numel(z), numel(z))), obj.Qz, 'UniformOutput', false);                
+                mm_copy.qcn.add(mm_copy.var,'Port_inj_z', Qz, obj.N, zeros(np,1), zeros(np,1), {'z_vars'});
+            else                             %% linear tpc-based formulation
+                mm_copy.lin.add(mm_copy.var,'Port_inj_z', obj.N, zeros(np,1), zeros(np,1), {'z_vars'});
             end
 
-            %% Compute complex power port injections
-            % prepare full vector of vars with updated u-vars
-            x = mm.var.params();
-            i1u = mm.var.idx.i1.u_vars;
-            iNu = mm.var.idx.iN.u_vars;
-            i1z = mm.var.idx.i1.z_vars;
-            iNz = mm.var.idx.iN.z_vars;
-            x(i1u:iNu) = u;
-            x(i1z:iNz) = z;
+            %% Compute complex power port injections            
             if mm.userdata.tpc.quad        %% quadratic tpc-based formulation
-                obj.soln.gs_ = mm.qcn.eval(mm.var, x, 'Port_inj_u')  + ...
-                               mm.qcn.eval(mm.var, x, 'Port_inj_z');
+                obj.soln.gs_ = mm_copy.qcn.eval(mm_copy.var, mm_copy.var.params(), 'Port_inj_u')  + ...
+                               mm_copy.qcn.eval(mm_copy.var,mm_copy.var.params(), 'Port_inj_z');
             else                            %% linear tpc-based formulation
-                obj.soln.gs_ = mm.lin.eval(mm.var, x, 'Port_inj_u') + ...
-                               mm.lin.eval(mm.var, x, 'Port_inj_z');
+                obj.soln.gs_ = mm_copy.lin.eval(mm_copy.var, mm_copy.var.params(), 'Port_inj_u')  + ...
+                               mm_copy.lin.eval(mm_copy.var, mm_copy.var.params(), 'Port_inj_z');
             end
         end
 
@@ -251,7 +247,7 @@ classdef net_model_tpc < mp.net_model & wgv.form_tpc
         % ************ OVERRIDDEN METHODS FROM PARENT CLASSES ************
         % -----------------------------------------------------------------
 
-        function P = stack_matrix_params(obj, name, QnotM)
+        function P = stack_matrix_params(obj, name, CnotM)
             % THIS FUNCTION OVERRIDES THE CORRESPONDING METHOD OF PARENT
             % CLASS mp.net_model (due to working with real vector x, and 
             % both cell and matrix parameters, i.e. Qu, Qz, M, and N)
@@ -261,54 +257,129 @@ classdef net_model_tpc < mp.net_model & wgv.form_tpc
             % element parameters.
             % 
             %
-            %   P = nm.stack_matrix_params(name, WnotM)
+            %   P = nm.stack_matrix_params(name, QnotM)
             %
             % Inputs:
             %   name (char array) : name of the parameter of interest            
-            %   WnotM (boolean) : true if parameter to be stacked is of
-            %                     class 'cell' (i.e. Qu or Qz), false otherwise            
+            %   CnotM (boolean) : true if parameter to be stacked is a
+            %                     cell and not a matrix (i.e. Qu or Qz), 
+            %                     false otherwise            
             %
             % Outputs:
             %   P (cell/array) : parameter of interest for the full network            
             %
-            % A given parameter (e.g. ``Qu``) for the full network is
+            % A given parameter (e.g. Qu) for the full network is
             % formed by stacking vertically the corresponding parameters 
             % for each element.
             
-            if QnotM
+            % Count the number of single-phase and thre-phase voltage variables 
+            if isfield(obj.node.idx.N,'bus')
+                nb1p = obj.node.idx.N.bus;
+            else
+                nb1p = 0;
+            end            
+            if isfield(obj.node.idx.N,'bus3p')
+                nb3p = sum(obj.node.idx.N.bus3p);
+            else
+                nb3p = 0;
+            end
+
+            % Count the number of single-phase and thre-phase non-voltage variables 
+            if isfield(obj.node.idx.N,'gen')
+                nz1p = obj.node.idx.N.gen;
+            else
+                nz1p = 0;
+            end            
+            if isfield(obj.node.idx.N,'buslink')
+                nz3p = sum(obj.node.idx.N.buslink);
+            else
+                nz3p = 0;
+            end
+            
+            % Check wheter network is hybrid
+            if all([nb1p nb3p])
+                ishybrid = 1;                
+            else
+                ishybrid = 0;                
+            end
+            obj.userdata.ishybrid = ishybrid;
+            
+            % Initialize single-phase and three-phase containers of parameters
+            if CnotM
                 P1p = {};
                 P3p = {};
             else
                 P1p = [];
                 P3p = [];
             end
-
+            
+            % Main loop through all element classes
             for k = 1:length(obj.elements)
                 nme = obj.elements{k};
                 Pk = nme.(name);
                 if isempty(Pk)
-                    if QnotM                        
+                    if CnotM                        
                         Pk = repmat([1 1 0], nme.nk * nme.np, 1);
                         Pk = mat2cell(Pk, ones(nme.nk * nme.np, 1));
                     else
                         if strcmp(name, 'M')
-                            Pk = spalloc(nme.nk * nme.np, 2*obj.node.N, 0);
+                            if any(ismember(nme.name,'3')) || strcmp(nme.name,'buslink')
+                                Pk = spalloc(nme.nk * nme.np, 2*nb3p, 0);
+                            else
+                                Pk = spalloc(nme.nk * nme.np, 2*nb1p, 0);
+                            end
                         else
-                            Pk = spalloc(nme.nk * nme.np, 2*obj.state.N, 0);
+                            if any(ismember(nme.name,'3'))
+                                Pk = spalloc(nme.nk * nme.np, 2*nz3p, 0);
+                            else
+                                Pk = spalloc(nme.nk * nme.np, 2*nz1p, 0);
+                            end
                         end                        
                     end
                 end
-                if ismember('3',nme.name) 
-                    P3p = vertcat(P3p,Pk);
+
+                if ishybrid
+                    if any(ismember(nme.name,'3')) || strcmp(nme.name,'buslink')
+                        if CnotM
+                            if ~isempty(nme.(name))
+                                Pk = cellfun(@(x)([x(:,[1 2])+2*nb1p x(:,3)]),Pk,'UniformOutput',false);
+                            end
+                            P3p = [P3p; Pk];
+                        else
+                            if strcmp(name, 'M')
+                                P3p = [P3p; Pk];
+                            else
+                                P3p = blkdiag(P3p, Pk);
+                            end
+                        end
+                    else
+                        if strcmp(name, 'N')
+                            P1p = blkdiag(P1p, Pk);
+                        else
+                            P1p = [P1p; Pk];
+                        end
+                    end
                 else
-                    P1p = vertcat(P1p,Pk);
-                end                
+                    if ismember(nme.name,'3')                        
+                        if strcmp(name, 'N')
+                            P3p = blkdiag(P3p, Pk);
+                        else
+                            P3p = [P3p; Pk];
+                        end
+                    else
+                        if strcmp(name, 'N')
+                            P1p = blkdiag(P1p, Pk);
+                        else
+                            P1p = [P1p; Pk];
+                        end
+                    end
+                end                                              
             end
 
-            if QnotM
+            if CnotM
                 P = [P1p; P3p];
             else
-                P = blkdiag(P1p, P3p);
+                P =  blkdiag(P1p, P3p);
             end
         end
 
@@ -361,7 +432,7 @@ classdef net_model_tpc < mp.net_model & wgv.form_tpc
                             fprintf([fmt '-\n'], pn);
                         else
                             s = 'non-empty';
-                            fprintf([fmt '%d / %-5d%s\n'], pn, (nk-nempty), nk, s);
+                            fprintf([fmt '%d ports %-5s\n'], pn, (nk-nempty), s);
                         end
                     else
                         if isempty(obj.(pn))

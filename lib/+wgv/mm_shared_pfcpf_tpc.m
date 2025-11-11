@@ -22,49 +22,205 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
 
             %% call parent
             ad = build_aux_data@mp.mm_shared_pfcpf(obj, nm, dm, mpopt);
-
-            %% Calculate Sbus (1-phase buses) 
-            if nm.elements.has_name('gen')    %% (1-phase buses)
-                Cgen1p = nm.elements.gen.C;
-                Dgen1p = nm.elements.gen.D;
-                if nm.elements.has_name('load')
-                    Cload1p = nm.elements.load.C;
-                    Sload1p = nm.elements.load.s;
+                        
+            if nm.userdata.ishybrid
+                %% Add indices of non-voltage variables for buslinks
+                nz_bl = sum(nm.state.idx.N.buslink);
+                if nm.elements.has_name('gen')
+                    nz1p = nm.state.idx.N.gen;
                 else
-                    Cload1p = 0;
-                    Sload1p = 0;
+                    nz1p = 0;
                 end
+                nz3p = nz_bl;
+                if nm.elements.has_name('gen3p')
+                    nz3p = nz3p + sum(nm.state.idx.N.gen3p);
+                end
+                nz = nz1p + nz3p;
+                ad.idzbl = (1:2*nz_bl)'+2*nz1p;
+
+                %% Compute [pv pq; pq + nb#p], with # holding single-phase and three-phase indices
+                nb1p = nm.node.idx.N.bus;
+                nb3p = nm.node.idx.N.bus3p(1);
+                nb = nb1p + 3*nb3p;
+
+                pv1p = dm.elements.bus.on(dm.elements.bus.tab.type == 2);
+                npv1p = numel(pv1p);
+                pq1p = dm.elements.bus.on(dm.elements.bus.tab.type == 1);
+                npq1p = numel(pq1p);
+                pv3p = dm.elements.bus3p.on(dm.elements.bus3p.tab.type == 2);
+                npv3p = numel(pv3p);
+                pv3p = repmat(pv3p,1,3) + [zeros(npv3p,1) ones(npv3p,1)*nb3p ones(npv3p,1)*2*nb3p] + 2*nb1p;
+                pq3p = dm.elements.bus3p.on(dm.elements.bus3p.tab.type == 1);
+                npq3p = numel(pq3p);
+                pq3p = repmat(pq3p,1,3) + [zeros(npq3p,1) ones(npq3p,1)*nb3p ones(npq3p,1)*2*nb3p] + 2*nb1p;                
+
+                vars_1p_3p_u = [[pv1p; pq1p; pq1p+nb1p];              % single-phase
+                              [pv3p(:); pq3p(:); pq3p(:)+3*nb3p]];  % three-phase
+
+                %% Compute permutation matrix for mapping pvq variables from 1p/3p order to system order
+                npv3p = numel(pv3p);
+                npq3p = numel(pq3p);
+                npv = npv1p+npv3p;
+                npq = npq1p+npq3p;
+                pm_phase_pvq_to_syst_u = [
+                    speye(npv1p)   spalloc(npv1p,2*npq+npv3p,0)
+                    spalloc(npv3p,npv1p+2*npq1p,0) speye(npv3p) spalloc(npv3p,2*npq3p,0)
+                    spalloc(npq1p,npv1p,0) speye(npq1p) spalloc(npq1p,npq+npv3p+npq3p,0)
+                    spalloc(npq3p,npv+2*npq1p,0) speye(npq3p) spalloc(npq3p,npq3p,0)
+                    spalloc(npq1p,npv1p+npq1p,0) speye(npq1p) spalloc(npq1p,npv3p+2*npq3p,0)
+                    spalloc(npq3p,npv+npq+npq1p,0) speye(npq3p)];
+
+                %% Compute permutation matrix for mapping buslink vars from 1p/3p order to system order
+                if nm.elements.has_name('gen')
+                    ngen1p = nm.elements.gen.nk;
+                else
+                    ngen1p = 0;
+                end
+                if nm.elements.has_name('gen3p')
+                    ngen3p = nm.elements.gen3p.nk;
+                else
+                    ngen3p = 0;
+                end
+                pm_phase_to_syst_z = [
+                    speye(ngen1p) spalloc(ngen1p,ngen1p+2*ngen3p+2*nz_bl,0)
+                    spalloc(ngen3p,2*ngen1p,0) speye(ngen3p) spalloc(ngen3p,ngen3p+2*nz_bl,0)
+                    spalloc(nz_bl,2*(ngen1p+ngen3p),0) speye(nz_bl) spalloc(nz_bl,nz_bl,0)];
+                pm_phase_to_syst_z = repmat(pm_phase_to_syst_z,2,1);
+
+                %% Compute permutation matrix for mapping all voltage angles and magnitudes from system order to 1p/3p
+                nb3p = 3*nb3p;
+                pm_all_va_lnvm_u = [
+                    speye(nb1p) spalloc(nb1p,2*nb3p+nb1p,0)
+                    spalloc(nb1p,nb,0) speye(nb1p) spalloc(nb1p,nb3p,0)
+                    spalloc(nb3p,nb1p,0) speye(nb3p) spalloc(nb3p,nb,0)
+                    spalloc(nb3p,nb+nb1p,0) speye(nb3p)];               
                 
-                Sbus1p = Cgen1p*Dgen1p'*(ad.zr + 1j * ad.zi) - Cload1p*Sload1p;
+                % Compute permutation matrix for mapping all states from real/imag order to 1p/3p order
+                pm_all_1p3p_z = [
+                    speye(nz1p) spalloc(nz1p,nz+nz3p,0)
+                    spalloc(nz3p,2*nz1p,0) speye(nz3p) spalloc(nz3p,nz3p,0)
+                    spalloc(nz1p,nz1p,0) speye(nz1p) spalloc(nz1p,2*nz3p,0)                                        
+                    spalloc(nz3p,nz+nz1p,0) speye(nz3p)];
+
+                vars_1p_3p_z = (1:2*nz_bl)'+2*nb;                
+
+                ad.pv1p = pv1p;
+                ad.pv3p = pv3p;
+                ad.vars_1p_3p_pvq = [vars_1p_3p_u; vars_1p_3p_z];
+                ad.pm_all_va_lnvm_u = pm_all_va_lnvm_u;
+                ad.pm_phase_to_syst_pvq = blkdiag(pm_phase_pvq_to_syst_u, speye(2*nz_bl));
+                ad.pm_phase_to_syst_all = blkdiag(pm_all_va_lnvm_u, pm_all_1p3p_z);
+                ad.pm_phase_to_syst_z = pm_phase_to_syst_z;
+                ad.pm_all_1p3p_z = pm_all_1p3p_z;
+            end            
+
+            %% Calculate Sbus (1-phase buses)
+            if nm.elements.has_name('bus')
+                nb1p = nm.node.idx.N.bus;
+            end
+
+            if nm.elements.has_name('gen')    %% (1-phase buses)
+                if nm.userdata.ishybrid                    
+                    Cgen1p = nm.elements.gen.C(1:nb1p,:);                    
+                else
+                    Cgen1p = nm.elements.gen.C;
+                end
+                Dgen1p = nm.elements.gen.D;
             else
-                Sbus1p = [];
+                Cgen1p = [];
+                Dgen1p = [];
+            end
+
+            if nm.elements.has_name('load')                
+                if nm.userdata.ishybrid
+                    Cload1p = nm.elements.load.C(1:nb1p,:);
+                else
+                    Cload1p = nm.elements.load.C;
+                end
+                Sload1p = nm.elements.load.s;
+            else
+                Cload1p = [];
                 Sload1p = [];
             end
+            
+            if ~isempty(Cgen1p)
+                if ~isempty(Cload1p)
+                    Sbus1p = Cgen1p*Dgen1p'*(ad.zr + 1j * ad.zi) - Cload1p*Sload1p;
+                else
+                    Sbus1p = Cgen1p*Dgen1p'*(ad.zr + 1j * ad.zi);
+                end                
+            else
+                if isempty(Cload1p)
+                    if nm.elements.has_name('bus')
+                        Sbus1p = zeros(nb1p,1);
+                    else
+                        Sbus1p = [];
+                    end                    
+                else
+                    Sbus1p = - Cload1p*Sload1p;
+                end                
+            end
+            
 
             %% Calculate Sbus (3-phase buses)
-            if isfield(nm.state.idx.N, 'gen3p')  %% (3-phase buses)
-                Cgen3p = nm.elements.gen3p.C;
+            if nm.elements.has_name('gen3p')    %% (1-phase buses)
+                Cgen3p = nm.elements.gen3p.C;                
                 Dgen3p = nm.elements.gen3p.D;
-                Cload3p = nm.elements.load3p.C;
-                Sload3p = nm.elements.load3p.s;
-                Sbus3p = Cgen3p*Dgen3p'*(ad.zr + 1j * ad.zi) - Cload3p*Sload3p;
             else
-                Sbus3p = [];
-                Sload3p = [];
+                Cgen3p = [];
+                Dgen3p = [];
             end
 
-            ad.Sbus = [Sbus1p; Sbus3p];
-            ad.Sload = [Sload1p; Sload3p];
+            if nm.elements.has_name('load3p')
+                Cload3p = nm.elements.load3p.C;
+                Sload3p = nm.elements.load3p.s;
+            else
+                Cload3p = [];
+                Sload3p = [];
+            end            
+            
+            if ~isempty(Cgen3p)
+                if ~isempty(Cload3p)
+                    Sbus3p = Cgen3p*Dgen3p'*(ad.zr + 1j * ad.zi) - Cload3p*Sload3p;
+                else
+                    Sbus3p = Cgen3p*Dgen3p'*(ad.zr + 1j * ad.zi);
+                end                
+            else
+                if isempty(Cload3p)
+                    if nm.elements.has_name('bus3p')
+                        Sbus3p = zeros(nm.node.idx.N.bus3p,1);
+                    else
+                        Sbus3p = [];
+                    end                    
+                else
+                    Sbus3p = - Cload3p*Sload3p;
+                end                
+            end          
 
-            %% add fields .lin and .quad to the property 'userdata' of
+            %%
+            if nm.userdata.ishybrid
+                ad.Sbus = [Sbus1p; Sbus3p(nb1p+1:end)];
+            else
+                ad.Sbus = [Sbus1p; Sbus3p];
+            end
+            
+            ad.Sload = [Sload1p; Sload3p];
+            
+
+            %% Add fields .lin and .quad to the property 'userdata' of
             %  the math model according to this same properties of 
             %  the task object
-
             
             if isfield(nm.userdata, 'tpc')
                 obj.userdata.tpc.lin  = nm.userdata.tpc.lin;
                 obj.userdata.tpc.quad = nm.userdata.tpc.quad;
-            end            
+            end
+
+            % Use initial value of variables at this point
+            ad.var_source = 'u0';
+
+            % Update aux data struct
+            obj.aux_data = ad;
         end
 
         function obj = add_system_vars_pf(obj, nm, dm, mpopt)
@@ -79,6 +235,8 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
 
             %% voltage magnitudes
             obj.add_system_varset_pf(nm, vvars{2}, 'pq');
+
+            %% 
         end
 
         function obj = add_system_varset_pf(obj, nm, vvar, typ)
@@ -128,7 +286,7 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
             u = [nm_vars.va; nm_vars.lnvm];
             z  = [nm_vars.zr; nm_vars.zi];
 
-            %% update z, if requested
+            %% update z, if requested            
             if nargin < 4 || ~only_u
                 z = obj.update_z(nm, u, z);
             end
@@ -161,16 +319,28 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
             Cload = blkdiag(Cload1p, Cload3p);
             Sload = Cload * ad.Sload;
             rpv = [ad.ref; ad.pv];
-            id_vars = (1 : 2*nm.node.N)';    %% full vector of u-vars [\theta_(1&3)p; lnvm__(1&3)p]
+
+            if nm.userdata.ishybrid                
+                id_vars = ad.vars_1p_3p_pvq;
+            else                
+                pvq = [ad.pv; ad.pq];
+                id_vars = [pvq; ad.pq + nm.node.N];    % the vector of variables is [theta_pv; theta_pq; lnvm_pq]  (npv+2np variables)
+            end            
 
             % Find ports of branches and shunts connected to each bus (for computing bus injection)
             ports = obj.ports_by_bus(nm);
 
             % Define quadratic forms for complex power bus injections at REF-PV buses
-            [Qbusrpv, Cbus_rpv, kbus_rpv] = obj.bus_complex_injection(nm, ports(rpv), id_vars);
+            ad.var_source = 'solx';
+            [Qbusrpv, Cbus_rpv, kbus_rpv] = obj.bus_complex_injection(nm, ports(rpv), id_vars, ad);
 
-            % coefficient matrix for power injection states for full network
-            CC = nm.C * nm.get_params([], 'N') * blkdiag(nm.D, nm.D)';
+            % coefficient matrix for power injection states for full network buses
+            if nm.userdata.ishybrid
+                CC = nm.C * nm.N * ad.pm_all_1p3p_z';
+            else
+                CC = nm.C * nm.N;
+            end
+            
 
             %% Add constraints for Pmis at REF and Qmis at REF/PV buses
             % Linear part goes first:
@@ -194,143 +364,234 @@ classdef (Abstract) mm_shared_pfcpf_tpc < mp.mm_shared_pfcpf
             end
     
             % Add set of variables
-            %obj.add_var('u_vars', 2*nm.node.N, u); % u_vars = [theta; lnvm]
-            obj.var.add('u_vars', 2*nm.node.N, u); % u_vars = [theta; lnvm]
+            id_vars = [ad.pv; ad.pq; ad.pq + nm.node.N];
+            if nm.userdata.ishybrid
+                i1 = nm.state.idx.i1.buslink(1);
+                iN = nm.state.idx.iN.buslink(end);
+                nb = nm.node.N;
+                nz = nm.state.N;
+                id_vars = [id_vars; (i1:iN)' + 2*nb; (i1:iN)' + 2*nb+nz];
+                vars = [u; z];
+            else
+                vars = u;
+            end
+            mm_copy = obj.copy();
+            mm_copy.var.add('vars', numel(id_vars), vars(id_vars));
 
             % Add set of constraints
-            if obj.userdata.tpc.quad         %% quadratic lnvm-based formulation
-                % obj.qcn.add(obj.var,'Pmis_ref', [], [], Q_Pref, C_Pref, k_Pref, {'u_vars'});
-                % obj.qcn.add(obj.var,'Qmis_rpv', [], [], Q_Qrpv, C_Qrpv, k_Qrpv, {'u_vars'});
-                obj.qcn.add(obj.var,'Pmis_ref', Q_Pref, C_Pref, -k_Pref, -k_Pref, {'u_vars'});
-                obj.qcn.add(obj.var,'Qmis_rpv', Q_Qrpv, C_Qrpv, -k_Qrpv, -k_Qrpv, {'u_vars'});
+            if obj.userdata.tpc.quad         %% quadratic lnvm-based formulation                
+                mm_copy.qcn.add(mm_copy.var,'Pmis_ref', Q_Pref, C_Pref, -k_Pref, -k_Pref, {'vars'});
+                mm_copy.qcn.add(mm_copy.var,'Qmis_rpv', Q_Qrpv, C_Qrpv, -k_Qrpv, -k_Qrpv, {'vars'});
             else                              %% linear lnvm-based formulation                
-                obj.lin.add(obj.var,'Pmis_ref', C_Pref, -k_Pref, -k_Pref, {'u_vars'});
-                obj.lin.add(obj.var,'Qmis_rpv', C_Qrpv, -k_Qrpv, -k_Qrpv, {'u_vars'});
+                mm_copy.lin.add(mm_copy.var,'Pmis_ref', C_Pref, -k_Pref, -k_Pref, {'vars'});
+                mm_copy.lin.add(mm_copy.var,'Qmis_rpv', C_Qrpv, -k_Qrpv, -k_Qrpv, {'vars'});
             end
+
+            %% Locate and classify generators at PV and Ref nodes
+            gen_info = obj.locate_generators(nm,CC);
 
             %% ----- Update active power at slack nodes -----
             % coefficient matrix for active power injection states for slack nodes
-            CCref = CC(ad.ref, :);
-            jr = find(any(CCref(:,1:size(nm.D,1)), 1));   %% indices of corresponding states            
-
-            % allocate active power at slack nodes to 1st direct inj state:
-            % find all z (except first one) with direct injection at each
-            % slack node
-            [i, j] = find(CCref(:,1:size(nm.D,1)));
-            if size(i, 2) > 1, i = i'; j = j'; end
-            ij = sortrows([i j]);       %% 1st state comes 1st for each node
-            [~, k1] = unique(ij(:, 1), 'first');%% index of 1st entry for each node
-            % all included states that are not 1st at their node
-            jn = unique(ij(~ismember(1:length(i), k1), 2));
-            jfirst = setdiff(jr, jn);
+            CCref = CC(ad.ref, :);            
             
-            if ~isempty(jn) % if we have extra states (more than 1) for any node(s)
-                [genbus, ~] = find(nm.elements.gen.C);
-                Pref_jn = sparse(genbus(jn), ones(length(jn),1), z(jn), length(genbus), 1);   %% total generation except first gen 
-                Pref_jn = full(Pref_jn(Pref_jn ~= 0));
-            else
-                Pref_jn = 0;
-            end
-
-            %% compute port active power injections at REF buses except generators
-            % prepare full vector of vars with updated u-vars
-            x = obj.var.params();
-            i1 = obj.var.idx.i1.u_vars;
-            iN = obj.var.idx.iN.u_vars;
-            x(i1:iN) = u;
             if obj.userdata.tpc.quad        %% quadratic lnvm-based formulation
-                Pbus_ref = obj.qcn.eval(obj.var, x, 'Pmis_ref') + real(Sload(ad.ref));
+                Pbus_ref = mm_copy.qcn.eval(mm_copy.var, mm_copy.var.params(), 'Pmis_ref') + real(Sload(ad.ref));
             else                             %% linear lnvm-based formulation
-                Pbus_ref = obj.lin.eval(obj.var, x, 'Pmis_ref') + real(Sload(ad.ref));
+                Pbus_ref = mm_copy.lin.eval(mm_copy.var, mm_copy.var.params(), 'Pmis_ref') + real(Sload(ad.ref));
             end
             
-            Pgen_ref = CCref(:,jfirst) \ - Pbus_ref;
+            % allocate active power to generators connected to Ref nodes 
+            idz = gen_info.Ref.idz_single;
+            if ~isempty(gen_info.Ref.idz_multiple)
+                all1st = cell2mat(cellfun(@(x)(x(1)),gen_info.Ref.idz_multiple,'UniformOutput',false));
+                idz = [idz; all1st];
+            end
+            Ptotal_ref = real(CCref(:,idz)) \ -Pbus_ref;  % If there are multiple gens connected at the same bus, the active power of the first one is computed
             
-            % allocate active power to the first gen at each REF bus            
-            z(jfirst) = Pgen_ref - Pref_jn;
+            % multiple generators
+            if ~isempty(gen_info.Ref.idz_multiple)
+                % distribute active power along all gens acording to Pmax
+                [~,id_multiple_ref] = ismember(all1st,idz);
+                Pbus = Ptotal_ref(id_multiple_ref);
+                for b = 1:numel(Pbus) 
+                    idgens = gen_info.Ref.idz_multiple{b};
+                    Pmax = gen_info.Ref.Pmax_multiple{b};
+                    Pmax(isinf(Pmax)) = 0;
+                    if any(Pmax)
+                        weights = Pmax/sum(Pmax);
+                    else
+                        weights = 1/length(Pmax);
+                    end
+                    z(idgens) = Pbus(b)*weights;
+                end
+            end
+
+            % single generators            
+            if ~isempty(gen_info.Ref.idz_single)
+                [~,idgens] = ismember(gen_info.Ref.idz_single,idz);
+                z(gen_info.Ref.idz_single) = Ptotal_ref(idgens);
+            end
 
             %% ----- Update reactive power at PV/Slack nodes -----
+            nz = nm.state.N;
+
             % coefficient matrix for reactive power injection states for PV/REF nodes
             CCrpv = CC(rpv, :);
-            jrpv = find(any(CCrpv(:,1:size(nm.D,1)), 1));   %% indices of corresponding states            
+
+            % extract active power injection of multiple generators connected at PV/Ref nodes
+            idz_multiple_rpv = [gen_info.Ref.idz_multiple; gen_info.PV.idz_multiple];
+            if ~isempty(idz_multiple_rpv)
+                Pg_multiple_rpv = cell(numel(idz_multiple_rpv),1);
+                for i = 1:numel(idz_multiple_rpv)
+                    Pg_multiple_rpv{i} = z(idz_multiple_rpv{i});
+                end
+            end
 
             % compute port reactive power injections at PV/REF buses except generators
             if obj.userdata.tpc.quad        %% quadratic lnvm-based formulation
-                Qbusrpv = obj.qcn.eval(obj.var, x, 'Qmis_rpv') + imag(Sload(rpv));
+                Qbus_rpv = mm_copy.qcn.eval(mm_copy.var, mm_copy.var.params(), 'Qmis_rpv') + imag(Sload(rpv));
             else                             %% linear lnvm-based formulation
-                Qbusrpv = obj.lin.eval(obj.var, x, 'Qmis_rpv') + imag(Sload(rpv));
+                Qbus_rpv = mm_copy.lin.eval(mm_copy.var, mm_copy.var.params(), 'Qmis_rpv') + imag(Sload(rpv));
             end
 
-            % allocate reactive power according to the number of gens at each node
-            if nm.elements.has_name('gen')
-                Cgen1p = nm.elements.gen.C;
-                ngen1p = nm.elements.gen.nk;
+            % allocate reactive power to generators connected to PV/Ref nodes 
+            idz = [gen_info.Ref.idz_single; gen_info.PV.idz_single];
+            if ~isempty(gen_info.Ref.idz_multiple)
+                all1st = cellfun(@(x)(x(1)),gen_info.Ref.idz_multiple,'UniformOutput',false);
             else
-                Cgen1p = [];
-                ngen1p = 0;
+                all1st = [];
             end
-            if nm.elements.has_name('gen3p')
-                Cgen3p = nm.elements.gen3p.C;
-                ngen3p = nm.elements.gen3p.nk;
-            else
-                Cgen3p = [];
-                ngen3p = 0;
+            if ~isempty(gen_info.PV.idz_multiple)
+                all1st_2 = cellfun(@(x)(x(1)),gen_info.PV.idz_multiple,'UniformOutput',false);
+                all1st = cell2mat([all1st; all1st_2]);
             end
-            Qgen = [];
-            Cgen = blkdiag(Cgen1p,  Cgen3p);
-            ngens = full(sum(Cgen, 2)); ngens(ad.pq) = [];
-            for g = 1:length(ngens)
-                Qgen = [Qgen; repmat(Qbusrpv(g), ngens(g), 1)];
-            end
-
-            % find indices of z-vars related to reactive injections for gens 
-            % according to the rpv indices
-            if nm.elements.has_name('gen')
-                Dgen1p = nm.elements.gen.D;
-            else
-                Dgen1p = [];
-            end
-            if nm.elements.has_name('gen3p')
-                Dgen3p = nm.elements.gen3p.D;
-            else
-                Dgen3p = [];
-            end
-            Dgen = blkdiag(Dgen1p, Dgen3p);
-            CD = Cgen * Dgen;
-            [Q_id, ~] = find(CD(rpv,:)'); 
+            idz = [idz; all1st];
+            Qtotal_rpv = imag(CCrpv(:,idz+nz)) \ -Qbus_rpv; % If there are multiple gens connected at the same bus, the reactive power of the first one is computed
             
-            % compute weights to distribute reactive injections in gens
-            % located at the same bus. In this implementation, reactive
-            % power is allocated proportionally to gen active power
-            weights = [];
-            for b = rpv'
-                idg = logical(full(Cgen(b,:)));
-                Pbus = sum(abs(z(idg)));
-                weights = [weights; abs(z(idg)./Pbus)];
+            % multiple generators
+            if ~isempty(idz_multiple_rpv)
+                % distribute reactive power along all gens acording to injected active power ammounts
+                [~,is_bus_multiple_rpv] = ismember(all1st,idz);
+                Qbus = Qtotal_rpv(is_bus_multiple_rpv);
+                for b = 1:numel(Qbus)
+                    idgens = idz_multiple_rpv{b};
+                    Pinj = Pg_multiple_rpv{b};
+                    weights = Pinj/sum(Pinj);
+                    z(idgens+nz) = Qbus(b)*weights;
+                end                
             end
-            weights(isnan(weights)) = 1;
-            z(ngen1p + ngen3p + Q_id) = weights.*Qgen;
+
+            % single generators
+            id_single_rpv = [gen_info.Ref.idz_single; gen_info.PV.idz_single];
+            if ~isempty(id_single_rpv)
+                [~,idgens] = ismember(id_single_rpv,idz);                
+                z(id_single_rpv+nz) = Qtotal_rpv(idgens);
+            end
+
+            %% Store copy of math model with the additioned variables and constraints
+            obj.aux_data.mm_copy = mm_copy;
+        end
+
+        function classified_gens = locate_generators(obj,nm,CC)
+            %
+            
+            % Extract info
+            ad = obj.aux_data;
+            nz = nm.state.N;
+            if obj.elements.has_name('gen')
+                ng1p = nm.elements.gen.nk;
+            else
+                ng1p = 0;
+            end
+            if obj.elements.has_name('gen3p')
+                ng3p = nm.elements.gen3p.nk;
+            else
+                ng3p = 0;
+            end
+            
+            % Initialize returned struct
+            es = struct('idz_single', [], ...
+                        'idz_multiple', [], ...
+                        'is_bus_multiple', []);
+            cg = struct('Ref',es,'PV',es);
+            cg.Ref.Pmax_multiple = [];
+            cg.Ref.Qmax_multiple = [];            
+
+            %% 1) Locate and classify states for generators connected at reference nodes
+            CCref = CC(ad.ref,:); %% coefficient matrix
+
+            % Ref nodes with more that one generator connected to them
+            cg.Ref.is_bus_multiple = zeros(ad.nref,1);
+            id_ref_gt1 = find(sum(real(CCref),2) < -1);
+            if ~isempty(id_ref_gt1)
+                ngt1 = numel(id_ref_gt1);                
+                cg.Ref.idz_multiple = cell(ngt1,1);
+                cg.Ref.Pmax_multiple = cell(ngt1,1);
+                cg.Ref.Qmax_multiple = cell(ngt1,1);
+                for i = 1:ngt1
+                    idbus = id_ref_gt1(i);
+                    idz = find(CCref(idbus,1:nz));
+                    if any(idz <= ng1p)
+                        cg.Ref.Pmax_multiple{i} =  nm.zr.data.vu.Pg(idz);
+                        cg.Ref.Qmax_multiple{i} =  nm.zi.data.vu.Qg(idz);
+                    end
+                    if any(idz > ng1p) && ng3p ~= 0
+                        Pmax = zeros(size(idz)); Qmax = Pmax;
+                        for p = 1:3
+                            idlim = (idz >= (p-1)*ng3p+1) & (idz <= p*ng3p); 
+                            Pmax(idlim) =  nm.zr.data.vu.Pg3{p}(idlim);
+                            Qmax(idlim) =  nm.zi.data.vu.Qg3{p}(idlim);
+                        end
+                        cg.Ref.Pmax_multiple{i} = Pmax;
+                        cg.Ref.Qmax_multiple{i} = Qmax;
+                    end                    
+                    cg.Ref.idz_multiple{i} = idz;                    
+                end
+                cg.Ref.is_bus_multiple(id_ref_gt1) = 1;                
+            end
+            cg.Ref.is_bus_multiple = logical(cg.Ref.is_bus_multiple);
+
+            % Ref nodes with a single generator connected to them
+            id_ref_single = setdiff((1:ad.nref)',id_ref_gt1);
+            if ~isempty(id_ref_single)
+                n1 = numel(id_ref_single);
+                cg.Ref.idz_single = zeros(n1,1);
+                for i = 1:n1
+                    idbus = id_ref_single(i);
+                    cg.Ref.idz_single(i) = find(CCref(idbus,1:nz));
+                end
+            end            
+
+            %% 2) Locate and classify states for generators connected at PV nodes
+            CCpv = CC(ad.pv,:); %% coefficient matrix
+
+            % PV nodes with more that one generator connected to them
+            cg.PV.is_bus_multiple = zeros(ad.npv,1);
+            id_pv_gt1 = find(sum(real(CCpv),2) < -1);
+            if ~isempty(id_pv_gt1)
+                ngt1 = numel(id_pv_gt1);
+                cg.PV.idz_multiple = cell(ngt1,1);
+                for i = 1:ngt1
+                    idbus = id_pv_gt1(i);
+                    cg.PV.idz_multiple{i} = find(CCpv(idbus,1:nz));
+                end
+                cg.PV.is_bus_multiple(id_pv_gt1) = 1;                
+            end
+            cg.PV.is_bus_multiple = logical(cg.PV.is_bus_multiple);
+
+            % PV nodes with a single generator connected to them
+            id_pv_single = setdiff((1:ad.npv)',id_pv_gt1);
+            if ~isempty(id_pv_single)
+                n1 = numel(id_pv_single);
+                cg.PV.idz_single = zeros(n1,1);
+                for i = 1:n1
+                    idbus = id_pv_single(i);
+                    cg.PV.idz_single(i) = find(CCpv(idbus,1:nz));
+                end
+            end
+          
+            %% Create output struct
+            classified_gens = cg;
         end
     end     %% methods
 end         %% classdef
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
