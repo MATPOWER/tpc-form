@@ -34,20 +34,20 @@ classdef nme_shunt3p_tpc < mp.nm_element & wgv.form_tpc
             bs = [dme.bs1 dme.bs2 dme.bs3];
             Ysh = gs + 1j * bs;                     %% shunt admittances
             nsh = obj.nk;                           %% number of shunt elements            
-            nb = (nm.node.N)/3;                     %% total number of buses
+            nb3p = sum(nm.node.idx.N.bus3p);        %% total number of buses
             id_sh = dme.bus;                        %% shunt buses             
 
             %% 1) Qu parameter            
-            ii = repmat(id_sh,1,3) + repmat([3*nb 4*nb 5*nb],nsh,1);
+            ii = repmat(id_sh,1,3) + repmat([nb3p 4*nb3p/3 5*nb3p/3],nsh,1);
             jj = ii;
             Qu_vals = 4*conj(Ysh);
             obj.Qu = mat2cell([ii(:) jj(:) Qu_vals(:)], ones(3*nsh, 1));
 
-            %% 2) M parameter
+            %% 2) M parameter            
             jj = ii(:);
             ii = (1:3*nsh)';
             M_vals = 2*conj(Ysh);
-            obj.M = sparse(ii, jj, M_vals(:), 3*nsh, 2*nm.node.N);
+            obj.M = sparse(ii, jj, M_vals(:), 3*nsh, 2*nb3p);
 
             %% 3) s parameter
             obj.s = conj(Ysh(:));

@@ -32,13 +32,16 @@ classdef mme_bus3p_pf_tpc < mp.mm_element
             nme = obj.network_model_element(nm);
 
             nn = nm.get_idx('node');
+
+            %% check for hybrid case            
+            u = nm.soln.u;
+            nbus = nm.node.N;
             
             rot = [0 -2*pi/3 2*pi/3];
             for p = 1:nme.nn
-                %% complex bus voltages
-                nbus3p = sum(nn.N.bus3p);
-                va_p = nm.soln.u(nn.i1.bus3p(p):nn.iN.bus3p(p)) + rot(p);
-                lnvm_p = nm.soln.u(nn.i1.bus3p(p)+nbus3p:nn.iN.bus3p(p)+nbus3p);
+                %% complex bus voltages                
+                va_p = u(nn.i1.bus3p(p):nn.iN.bus3p(p)) + rot(p);
+                lnvm_p = u(nn.i1.bus3p(p)+nbus:nn.iN.bus3p(p)+nbus);
 
                 %% update in the data model
                 dme.tab.(sprintf('va%d', p))(dme.on) = va_p * 180/pi;
