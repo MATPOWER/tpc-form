@@ -199,47 +199,95 @@ classdef net_model_tpc < mp.net_model & wgv.form_tpc
             % Takes the solved network state, computes the port complex 
             % power injections, and saves them in ``nm.soln.gs_``.
 
-            
-            % Extract solution, auxdata, and copy of math model
-            u = obj.soln.u;                     %% u_vars [theta; lnvm]
-            z = obj.soln.z;                     %% z_vars [zr; zi]
-            ad = mm.aux_data;
-            mm_copy = mm.aux_data.mm_copy;      %% The copy of the math model with additional vars and constraints
-
-            % Create variables for all buses and states in the order of 1p/3p
-            if obj.userdata.ishybrid
-                mm_copy.var.add('u_vars',numel(u),ad.pm_all_va_lnvm_u*u);
-                mm_copy.var.add('z_vars',numel(z),ad.pm_all_1p3p_z*z);
+            %% Get task class beig solved
+            if isa(mm,'wgv.math_model_pf_tpc')
+                task = 'PF';
+            elseif isa(mm,'wgv.math_model_orpd_tpc')
+                task = 'ORPD';
             else
-                mm_copy.var.add('u_vars',numel(u),u);
-                mm_copy.var.add('z_vars',numel(z),z);
-            end
-            np = obj.port.N;
-
-            % (1) constraints for u-vars
-
-            if mm.userdata.tpc.quad        %% quadratic tpc-based formulation                
-                Qu = cellfun(@(x)(sparse(x(:,1), x(:,2), x(:,3), numel(u), numel(u))), obj.Qu, 'UniformOutput', false);                
-                mm_copy.qcn.add(mm_copy.var,'Port_inj_u', Qu, obj.M, -obj.s, -obj.s, {'u_vars'});
-            else                             %% linear tpc-based formulation
-                mm_copy.lin.add(mm_copy.var,'Port_inj_u', obj.M, -obj.s, -obj.s, {'u_vars'});
+                error('wgv.net_model.port_inj_soln: task class not recognized')
             end
 
-            % (2) constraints for z-vars
-            if mm.userdata.tpc.quad        %% quadratic tpc-based formulation                
-                Qz = cellfun(@(x)(sparse(x(:,1), x(:,2), x(:,3), numel(z), numel(z))), obj.Qz, 'UniformOutput', false);                
-                mm_copy.qcn.add(mm_copy.var,'Port_inj_z', Qz, obj.N, zeros(np,1), zeros(np,1), {'z_vars'});
-            else                             %% linear tpc-based formulation
-                mm_copy.lin.add(mm_copy.var,'Port_inj_z', obj.N, zeros(np,1), zeros(np,1), {'z_vars'});
-            end
+            %% Compute complex port injections            
+            switch task
+                case {'PF'}
+                    u = obj.soln.u;                     %% u_vars [theta; lnvm]
+                    z = obj.soln.z;                     %% z_vars [zr; zi]
 
-            %% Compute complex power port injections            
-            if mm.userdata.tpc.quad        %% quadratic tpc-based formulation
-                obj.soln.gs_ = mm_copy.qcn.eval(mm_copy.var, mm_copy.var.params(), 'Port_inj_u')  + ...
-                               mm_copy.qcn.eval(mm_copy.var,mm_copy.var.params(), 'Port_inj_z');
-            else                            %% linear tpc-based formulation
-                obj.soln.gs_ = mm_copy.lin.eval(mm_copy.var, mm_copy.var.params(), 'Port_inj_u')  + ...
-                               mm_copy.lin.eval(mm_copy.var, mm_copy.var.params(), 'Port_inj_z');
+                    % Extract solution, auxdata, and copy of math model
+                    ad = mm.aux_data;
+                    mm_copy = mm.aux_data.mm_copy;      %% The copy of the math model with additional vars and constraints
+
+                    % Create variables for all buses and states in the order of 1p/3p
+                    if obj.userdata.ishybrid
+                        mm_copy.var.add('u_vars',numel(u),ad.pm_all_va_lnvm_u*u);
+                        mm_copy.var.add('z_vars',numel(z),ad.pm_all_1p3p_z*z);
+                    else
+                        mm_copy.var.add('u_vars',numel(u),u);
+                        mm_copy.var.add('z_vars',numel(z),z);
+                    end
+                    np = obj.port.N;
+
+                    % (1) constraints for u-vars
+
+                    if mm.userdata.tpc.quad        %% quadratic tpc-based formulation
+                        Qu = cellfun(@(x)(sparse(x(:,1), x(:,2), x(:,3), numel(u), numel(u))), obj.Qu, 'UniformOutput', false);
+                        mm_copy.qcn.add(mm_copy.var,'Port_inj_u', Qu, obj.M, -obj.s, -obj.s, {'u_vars'});
+                    else                             %% linear tpc-based formulation
+                        mm_copy.lin.add(mm_copy.var,'Port_inj_u', obj.M, -obj.s, -obj.s, {'u_vars'});
+                    end
+
+                    % (2) constraints for z-vars
+                    if mm.userdata.tpc.quad        %% quadratic tpc-based formulation
+                        Qz = cellfun(@(x)(sparse(x(:,1), x(:,2), x(:,3), numel(z), numel(z))), obj.Qz, 'UniformOutput', false);
+                        mm_copy.qcn.add(mm_copy.var,'Port_inj_z', Qz, obj.N, zeros(np,1), zeros(np,1), {'z_vars'});
+                    else                             %% linear tpc-based formulation
+                        mm_copy.lin.add(mm_copy.var,'Port_inj_z', obj.N, zeros(np,1), zeros(np,1), {'z_vars'});
+                    end
+
+                    %% Compute complex power port injections
+                    if mm.userdata.tpc.quad        %% quadratic tpc-based formulation
+                        obj.soln.gs_ = mm_copy.qcn.eval(mm_copy.var, mm_copy.var.params(), 'Port_inj_u')  + ...
+                            mm_copy.qcn.eval(mm_copy.var,mm_copy.var.params(), 'Port_inj_z');
+                    else                            %% linear tpc-based formulation
+                        obj.soln.gs_ = mm_copy.lin.eval(mm_copy.var, mm_copy.var.params(), 'Port_inj_u')  + ...
+                            mm_copy.lin.eval(mm_copy.var, mm_copy.var.params(), 'Port_inj_z');
+                    end
+                case {'ORPD'}
+                    x = obj.soln.x;
+
+                    varname_map = struct('port',{'gen','branch','shunt','gen3p','line3p','xfmr3p'}, ...
+                        'var',{'g','branch','shunt','g3','line3p','xfmr3p'});
+                    
+                    s = zeros(obj.port.N,1);
+                    for e = 1:length(varname_map)
+                        map = varname_map(e);
+                        if obj.elements.has_name(map.port)
+                            port_i1 = min(obj.port.idx.i1.(map.port));
+                            port_iN = max(obj.port.idx.iN.(map.port));
+                            varP_i1 = min(mm.var.idx.i1.(['P' map.var]));
+                            varP_iN = max(mm.var.idx.iN.(['P' map.var]));
+                            varQ_i1 = min(mm.var.idx.i1.(['Q' map.var]));
+                            varQ_iN = max(mm.var.idx.iN.(['Q' map.var]));
+
+                            s(port_i1:port_iN) = x(varP_i1:varP_iN) + 1j*x(varQ_i1:varQ_iN);
+                        end
+                    end
+                    
+                    % TD Interfaces
+                    port_i1 = min(obj.port.idx.i1.buslink(2:end));
+                    port_iN = max(obj.port.idx.iN.buslink(2:end));
+                    varP_i1 = min(mm.var.idx.i1.Pinter);
+                    varP_iN = max(mm.var.idx.iN.Pinter);
+                    varQ_i1 = min(mm.var.idx.i1.Qinter);
+                    varQ_iN = max(mm.var.idx.iN.Qinter);
+                    s(port_i1:port_iN) = x(varP_i1:varP_iN) + 1j*x(varQ_i1:varQ_iN);
+
+                    % loads
+                    
+
+                    % return complex port injections
+                    obj.soln.gs_ = s;
             end
         end
 

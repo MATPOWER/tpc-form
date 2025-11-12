@@ -2,7 +2,15 @@ classdef case_utils < mp.case_utils
 
 
     methods (Static)
-        function mpc_out = unbalance_case(mpc_in,unbalancing)
+        function mpc_out = unbalance_case(mpc_in,unbalancing,params)
+            if nargin < 3
+                params = struct('max_ldpf', 1, ...
+                                'min_ldpf', 0.5, ...
+                                'max_kW',   1.25, ...
+                                'min_kW',   0.75, ...
+                                'rnd_ldpf', 1);
+            end
+
             mpc_out = mpc_in;
             if any(ismember(upper(unbalancing),{'LOAD'}))
                 nl = size(mpc_in.load3p,1);
@@ -10,11 +18,14 @@ classdef case_utils < mp.case_utils
                 id_phase_kW = randi(3,1,nl);
                 old_ldpf = mpc_out.load3p(:,7:9);
                 old_kW = mpc_out.load3p(:,4:6);
-                val_max_ldpf = 1;
-                val_min_ldpf = 0.5;
-                new_ldpf = ((val_max_ldpf - val_min_ldpf)*rand(nl,1) + val_min_ldpf).*sign(randn(nl,1));
-                val_max_kW = 1.25; % percentage
-                val_min_kW = 0.75; % percentage
+                val_max_ldpf = params.max_ldpf;
+                val_min_ldpf = params.min_ldpf;
+                new_ldpf = ((val_max_ldpf - val_min_ldpf)*rand(nl,1) + val_min_ldpf);
+                if params.rnd_ldpf
+                    new_ldpf = params.rnd_ldpf.*sign(randn(nl,1));
+                end
+                val_max_kW = params.max_kW; % percentage
+                val_min_kW = params.min_kW; % percentage
                 new_kW = (val_max_kW - val_min_kW)*rand(1,nl) + val_min_kW;
 
                 old_ldpf(sub2ind(size(old_ldpf), 1:nl, id_phase_ldpf)) = new_ldpf;
@@ -556,20 +567,13 @@ classdef case_utils < mp.case_utils
             
             mpc_T = loadcase(caseT);
             mpc_D = loadcase(caseD);
-
-            f_T = cellstr(num2str(mpc_T.branch(:,F_BUS)));
-            t_T = cellstr(num2str(mpc_T.branch(:,T_BUS)));
-            f_D = cellstr(num2str(mpc_D.branch(:,F_BUS)));
-            t_D = cellstr(num2str(mpc_D.branch(:,T_BUS)));
-            busesT_cell_str = cellstr(num2str(busesT));
-            busesD_cell_str = cellstr(num2str(busesD));
-
-            f_T = cellfun(@strtrim, f_T, 'UniformOutput', false);
-            t_T = cellfun(@strtrim, t_T, 'UniformOutput', false);
-            f_D = cellfun(@strtrim, f_D, 'UniformOutput', false);
-            t_D = cellfun(@strtrim, t_D, 'UniformOutput', false);
-            busesT_cell_str = cellfun(@strtrim, busesT_cell_str, 'UniformOutput', false);
-            busesD_cell_str = cellfun(@strtrim, busesD_cell_str, 'UniformOutput', false);
+            
+            f_T = wgv.case_utils.vec2char(mpc_T.branch(:,F_BUS));
+            t_T = wgv.case_utils.vec2char(mpc_T.branch(:,T_BUS));
+            f_D = wgv.case_utils.vec2char(mpc_D.branch(:,F_BUS));
+            t_D = wgv.case_utils.vec2char(mpc_D.branch(:,T_BUS));
+            busesT_cell_str = wgv.case_utils.vec2char(busesT);
+            busesD_cell_str = wgv.case_utils.vec2char(busesD);
 
             graph_T = graph(f_T,t_T);
             graph_D = graph(f_D,t_D);
@@ -616,6 +620,10 @@ classdef case_utils < mp.case_utils
             id_load_T(id_mix_T) = 0;
             id_gen_T(id_mix_T) = 0;
 
+            busesT_load = wgv.case_utils.vec2char(mpc_T.bus(id_load_T,BUS_I));
+            busesT_gen = wgv.case_utils.vec2char(mpc_T.bus(id_gen_T,BUS_I));
+            busesT_mix = wgv.case_utils.vec2char(mpc_T.bus(id_mix_T,BUS_I));
+
             nbD = size(mpc_D.bus,1);
             id_load_D = or(mpc_D.bus(:,PD)~=0, mpc_D.bus(:,QD)~=0);
             [~,id_bus_gen_D] = ismember(mpc_D.gen(:,GEN_BUS),mpc_D.bus(:,BUS_I));
@@ -624,14 +632,18 @@ classdef case_utils < mp.case_utils
             id_load_D(id_mix_D) = 0;
             id_gen_D(id_mix_D) = 0;
 
-            % Customize load (red), generation (green) and mixed (yellow) color nodes
-            highlight(hT,graph_T.Nodes.Name(id_load_T),'NodeColor',[0.83 0.14 0.14]);
-            highlight(hT,graph_T.Nodes.Name(id_gen_T),'NodeColor',[0.25 0.80 0.54]);
-            highlight(hT,graph_T.Nodes.Name(id_mix_T),'NodeColor',[0.78 0.59 0.06]);
+            busesD_load = wgv.case_utils.vec2char(mpc_D.bus(id_load_D,BUS_I));
+            busesD_gen = wgv.case_utils.vec2char(mpc_D.bus(id_gen_D,BUS_I));
+            busesD_mix = wgv.case_utils.vec2char(mpc_D.bus(id_mix_D,BUS_I));
 
-            highlight(hD,graph_D.Nodes.Name(id_load_D),'NodeColor',[0.83 0.14 0.14]);
-            highlight(hD,graph_D.Nodes.Name(id_gen_D),'NodeColor',[0.25 0.80 0.54]);
-            highlight(hD,graph_D.Nodes.Name(id_mix_D),'NodeColor',[0.78 0.59 0.06]);
+            % Customize load (red), generation (green) and mixed (yellow) color nodes
+            highlight(hT,busesT_load,'NodeColor',[0.83 0.14 0.14]);
+            highlight(hT,busesT_gen,'NodeColor',[0.25 0.80 0.54]);
+            highlight(hT,busesT_mix,'NodeColor',[0.78 0.59 0.06]);
+
+            highlight(hD,busesD_load,'NodeColor',[0.83 0.14 0.14]);
+            highlight(hD,busesD_gen,'NodeColor',[0.25 0.80 0.54]);
+            highlight(hD,busesD_mix,'NodeColor',[0.78 0.59 0.06]);
 
             % Identify branches with transformers
             id_xfmr_T = find(mpc_T.branch(:,TAP) ~= 0);
@@ -645,7 +657,30 @@ classdef case_utils < mp.case_utils
             highlight(hT,busesT_cell_str,'Marker','h','MarkerSize',8,'NodeColor',[0.54 0 0.54])
             highlight(hD,busesD_cell_str,'Marker','h','MarkerSize',8,'NodeColor',[0.54 0 0.54])
             %labelnode(hD,busesD_cell_str,cellfun(@(x,y)([x '(' y ')']),busesD_cell_str,busesT_cell_str,'UniformOutput',false))
+        end
 
+        function id_neigh = find_neighbors(mpc,id_bus)
+            %
+
+            define_constants;
+            
+            mpc = loadcase(mpc);
+
+            f = mpc.branch(:,F_BUS);
+            t = mpc.branch(:,T_BUS);
+
+            G = graph(f,t);            
+            id_neigh = neighbors(G,id_bus);
+        end
+
+        function charnum = vec2char(x)
+            %
+            if any(x)
+                charnum = cellstr(num2str(x));
+                charnum = cellfun(@strtrim, charnum, 'UniformOutput', false);
+            else
+                charnum = {};
+            end
         end
     end     %% methods (Static)
 end
